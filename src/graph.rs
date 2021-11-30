@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use cpal::Sample;
 use crossbeam_channel::Receiver;
+use intmap::IntMap;
 
 use crate::alloc::{Alloc, AudioBuffer};
 use crate::buffer::{ChannelConfig, ChannelCountMode};
@@ -247,7 +248,7 @@ impl Node {
 
 pub(crate) struct Graph {
     // actual audio graph
-    nodes: HashMap<NodeIndex, Node>,
+    nodes: IntMap<Node>,
     edges: HashSet<((NodeIndex, u32), (NodeIndex, u32))>, // (node,output) to (node,input)
 
     // topological sorting
@@ -263,7 +264,7 @@ pub(crate) struct Graph {
 impl Graph {
     pub fn new() -> Self {
         Graph {
-            nodes: HashMap::new(),
+            nodes: IntMap::new(),
             edges: HashSet::new(),
             ordered: vec![],
             marked: vec![],
@@ -286,7 +287,7 @@ impl Graph {
         let outputs = vec![AudioBuffer::new(self.alloc.silence()); outputs];
 
         self.nodes.insert(
-            index,
+            index.0,
             Node {
                 processor,
                 inputs,
@@ -316,7 +317,7 @@ impl Graph {
     }
 
     fn mark_free_when_finished(&mut self, index: NodeIndex) {
-        self.nodes.get_mut(&index).unwrap().free_when_finished = true;
+        self.nodes.get_mut(index.0).unwrap().free_when_finished = true;
     }
 
     pub fn children(&self, node: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
@@ -372,7 +373,7 @@ impl Graph {
         // visit all registered nodes, depth first search
         self.nodes.keys().for_each(|&i| {
             self.visit(
-                i,
+                NodeIndex(i),
                 &mut marked,
                 &mut marked_temp,
                 &mut ordered,
@@ -386,7 +387,7 @@ impl Graph {
         // mute the nodes inside cycles by clearing their output
         for key in in_cycle.iter() {
             self.nodes
-                .get_mut(key)
+                .get_mut(key.0)
                 .unwrap()
                 .outputs
                 .iter_mut()
@@ -416,7 +417,7 @@ impl Graph {
         // process every node, in topological sorted order
         ordered.iter().for_each(|index| {
             // remove node from graph, re-insert later (for borrowck reasons)
-            let mut node = nodes.remove(index).unwrap();
+            let mut node = nodes.remove(index.0).unwrap();
 
             // for lifecycle management, check if any inputs are present
             node.has_inputs_connected = false;
@@ -441,7 +442,7 @@ impl Graph {
                     },
                 )
                 .for_each(|(&(node_index, output), input)| {
-                    let input_node = nodes.get_mut(&node_index).unwrap();
+                    let input_node = nodes.get_mut(node_index.0).unwrap();
                     input_node.has_outputs_connected = true;
                     let input_node = &*input_node; // reborrow as immutable
 
@@ -474,16 +475,16 @@ impl Graph {
             node.process(params, timestamp, sample_rate);
 
             // re-insert node in graph
-            nodes.insert(*index, node);
+            nodes.insert(index.0, node);
         });
 
         // audio graph cleanup of decomissioned nodes
         let edges = &mut self.edges;
         let ordered = &mut self.ordered;
-        nodes.retain(|&index, node| {
+        nodes.retain(|index, node| {
             // check if the Node has reached end of lifecycle
             if node.can_free() {
-                edges.retain(|&(s, d)| s.0 != index && d.0 != index);
+                edges.retain(|&(s, d)| s.0 .0 != index && d.0 .0 != index);
                 ordered.clear(); // void current ordering
                 false // do no retain
             } else {
@@ -493,7 +494,7 @@ impl Graph {
 
         // return buffer of destination node
         // assume only 1 output (todo)
-        &self.nodes.get(&NodeIndex(0)).unwrap().outputs[0]
+        &self.nodes.get(0).unwrap().outputs[0]
     }
 }
 

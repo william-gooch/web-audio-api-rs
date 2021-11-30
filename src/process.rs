@@ -1,6 +1,6 @@
 //! Audio processing code that runs on the audio rendering thread
 
-use std::collections::HashMap;
+use intmap::IntMap;
 
 use crate::alloc::AudioBuffer;
 use crate::context::AudioParamId;
@@ -47,16 +47,17 @@ pub trait AudioProcessor: Send {
 ///
 /// Provided to implementations of [`AudioProcessor`] in the render thread
 pub struct AudioParamValues<'a> {
-    nodes: &'a HashMap<NodeIndex, Node>,
+    nodes: &'a IntMap<Node>,
 }
 
 impl<'a> AudioParamValues<'a> {
-    pub(crate) fn from(nodes: &'a HashMap<NodeIndex, Node>) -> Self {
+    pub(crate) fn from(nodes: &'a IntMap<Node>) -> Self {
         Self { nodes }
     }
 
     pub(crate) fn get_raw(&self, index: &AudioParamId) -> &AudioBuffer {
-        self.nodes.get(&index.into()).unwrap().get_buffer()
+        let index: NodeIndex = index.into();
+        self.nodes.get(index.0).unwrap().get_buffer()
     }
 
     /// Get the computed values for the given [`crate::param::AudioParam`]
